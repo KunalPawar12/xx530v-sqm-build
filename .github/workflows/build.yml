@@ -42,7 +42,7 @@ jobs:
 
       - name: Clone developer build configuration
         run: |
-          git clone --depth 1 https://sirherobrine23.com.br/airoha_en7523/builds.git developer-builds
+          git clone --depth 1 https://github.com/Sirherobrine23/airoha_en7523_builds.git developer-builds
           test -f developer-builds/en7523.config
           test -f developer-builds/en7523_files/feeds.conf
           cp developer-builds/en7523.config .config
@@ -80,7 +80,6 @@ jobs:
           CONFIG_PACKAGE_coreutils-sleep=y
           EOF
 
-          mkdir -p package/qosmate package/luci-app-qosmate
           git clone --depth 1 --branch v1.9.0 https://github.com/hudra0/qosmate.git package/qosmate
           git clone --depth 1 https://github.com/hudra0/luci-app-qosmate.git package/luci-app-qosmate
 
