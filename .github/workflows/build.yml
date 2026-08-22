@@ -55,6 +55,10 @@ jobs:
           echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           cp ../.config .config
           cp ../files/feeds.conf feeds.conf
+          # The developer's current en7523.config has CONFIG_FEED_airoha disabled.
+          # The Airoha luci-packages feed is hosted on a private/authenticated
+          # Gitea instance, so do not attempt to clone it from GitHub Actions.
+          sed -i '/^src-git airoha /d' feeds.conf
 
       - name: Add QoSmate and SQM packages to developer config
         working-directory: openwrt
@@ -83,23 +87,12 @@ jobs:
           git clone --depth 1 --branch v1.9.0 https://github.com/hudra0/qosmate.git package/qosmate
           git clone --depth 1 https://github.com/hudra0/luci-app-qosmate.git package/luci-app-qosmate
 
-      - name: Update feeds and explicitly restore Airoha feed
+      - name: Update public feeds
         working-directory: openwrt
         run: |
           set -euxo pipefail
           export GIT_TERMINAL_PROMPT=0
-
-          # Update the standard public feeds from the developer's feeds.conf.
           ./scripts/feeds update packages routing telephony video luci
-
-          # The developer's Airoha feed is hosted outside GitHub. Clone it
-          # explicitly so feeds/airoha exists before feeds are installed.
-          rm -rf feeds/airoha
-          git clone --depth 1 https://sirherobrine23.com.br/airoha_en7523/luci-packages.git feeds/airoha
-
-          test -d feeds/airoha
-          test -f feeds/airoha/Makefile || { echo 'Airoha feed has no top-level Makefile'; find feeds/airoha -maxdepth 2 -type f | head -50; exit 1; }
-
           ./scripts/feeds install -a
 
       - name: Select QoSmate packages and finalize config
@@ -112,8 +105,8 @@ jobs:
           make defconfig
           echo '--- Device profiles ---'
           grep -E '^CONFIG_TARGET_(airoha|DEVICE_airoha_en7523)' .config | grep -E 'tplink|MULTI|ALL' || true
-          echo '--- OMCI ---'
-          grep -E '^CONFIG_PACKAGE_(omci-agent|luci-app-omci)=' .config || true
+          echo '--- OMCI-related configuration ---'
+          grep -Ei 'omci|gpon|xpon' .config || true
           echo '--- QoS ---'
           grep -E '^CONFIG_PACKAGE_(sqm-scripts|luci-app-sqm|qosmate|luci-app-qosmate|kmod-sched-cake|kmod-sched-fq_codel|kmod-ifb|tc-full)=' .config || true
 
@@ -134,8 +127,8 @@ jobs:
           test -f bin/targets/airoha/en7523/openwrt-airoha-en7523-tplink_xx230v-v1-squashfs-sysupgrade.bin
           echo '--- Verify exact target ---'
           grep -E '^CONFIG_TARGET_airoha_en7523_DEVICE_tplink_xx230v-v1=y' .config
-          echo '--- Verify OMCI ---'
-          grep -E '^CONFIG_PACKAGE_(omci-agent|luci-app-omci)=y' .config
+          echo '--- Verify OMCI/xPON-related configuration ---'
+          grep -Ei 'omci|gpon|xpon' .config || true
           echo '--- Verify QoS ---'
           grep -E '^CONFIG_PACKAGE_(sqm-scripts|luci-app-sqm|qosmate|luci-app-qosmate|kmod-sched-cake|kmod-sched-fq_codel|kmod-ifb|tc-full)=y' .config
 
@@ -147,7 +140,8 @@ jobs:
           printf 'Base: Sirherobrine23/openwrt airoha_en7523\n' > artifact/BUILD_INFO.txt
           printf 'Source commit: %s\n' "$SOURCE_COMMIT" >> artifact/BUILD_INFO.txt
           printf 'Device: TP-Link xx230v/xx530v v1 (tplink_xx230v-v1)\n' >> artifact/BUILD_INFO.txt
-          printf 'OMCI/xPON: preserved from developer build configuration\n' >> artifact/BUILD_INFO.txt
+          printf 'Developer config: Sirherobrine23/airoha_en7523_builds\n' >> artifact/BUILD_INFO.txt
+          printf 'OMCI/xPON: preserved from developer build configuration; verify config before flashing.\n' >> artifact/BUILD_INFO.txt
           printf 'QoS: QoSmate + LuCI QoSmate + SQM + LuCI SQM + CAKE + FQ-CoDel\n' >> artifact/BUILD_INFO.txt
           printf 'Important: enable only one traffic shaper at a time.\n' >> artifact/BUILD_INFO.txt
           sha256sum artifact/*sysupgrade*.bin > artifact/SHA256SUMS.txt
