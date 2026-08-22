@@ -83,10 +83,23 @@ jobs:
           git clone --depth 1 --branch v1.9.0 https://github.com/hudra0/qosmate.git package/qosmate
           git clone --depth 1 https://github.com/hudra0/luci-app-qosmate.git package/luci-app-qosmate
 
-      - name: Update and install feeds
+      - name: Update feeds and explicitly restore Airoha feed
         working-directory: openwrt
         run: |
-          ./scripts/feeds update -a
+          set -euxo pipefail
+          export GIT_TERMINAL_PROMPT=0
+
+          # Update the standard public feeds from the developer's feeds.conf.
+          ./scripts/feeds update packages routing telephony video luci
+
+          # The developer's Airoha feed is hosted outside GitHub. Clone it
+          # explicitly so feeds/airoha exists before feeds are installed.
+          rm -rf feeds/airoha
+          git clone --depth 1 https://sirherobrine23.com.br/airoha_en7523/luci-packages.git feeds/airoha
+
+          test -d feeds/airoha
+          test -f feeds/airoha/Makefile || { echo 'Airoha feed has no top-level Makefile'; find feeds/airoha -maxdepth 2 -type f | head -50; exit 1; }
+
           ./scripts/feeds install -a
 
       - name: Select QoSmate packages and finalize config
