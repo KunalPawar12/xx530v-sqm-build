@@ -1,4 +1,4 @@
-name: Build xx530v SQM firmware
+name: Build xx530v QoS firmware
 
 on:
   workflow_dispatch:
@@ -33,30 +33,55 @@ jobs:
           git checkout aeee87fcbf75c3b8ea027fa33b50d795c60ffbb1
           echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Update feeds
+      - name: Add QoSmate backend and LuCI frontend
+        working-directory: openwrt
+        run: |
+          git clone --depth 1 --branch v1.9.0 https://github.com/hudra0/qosmate.git package/qosmate
+          git clone --depth 1 https://github.com/hudra0/luci-app-qosmate.git package/luci-app-qosmate
+
+      - name: Update OpenWrt feeds
         working-directory: openwrt
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Select TP-Link xx230v/xx530v v1 target and SQM packages
+      - name: Select TP-Link xx230v/xx530v v1 and QoS packages
         working-directory: openwrt
         run: |
           cat > .config <<'EOF'
           CONFIG_TARGET_airoha=y
           CONFIG_TARGET_airoha_en7523=y
           CONFIG_TARGET_DEVICE_airoha_en7523_DEVICE_tplink_xx230v_v1=y
+
+          # SQM / CAKE
           CONFIG_PACKAGE_sqm-scripts=y
           CONFIG_PACKAGE_luci-app-sqm=y
           CONFIG_PACKAGE_kmod-sched-cake=y
           CONFIG_PACKAGE_kmod-sched-fq_codel=y
           CONFIG_PACKAGE_kmod-ifb=y
+
+          # QoSmate backend/frontend and its runtime dependencies
+          CONFIG_PACKAGE_qosmate=y
+          CONFIG_PACKAGE_luci-app-qosmate=y
+          CONFIG_PACKAGE_kmod-sched=y
+          CONFIG_PACKAGE_kmod-veth=y
+          CONFIG_PACKAGE_kmod-netem=y
+          CONFIG_PACKAGE_kmod-sched-ctinfo=y
+          CONFIG_PACKAGE_kmod-sched-red=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_tc-full=y
+          CONFIG_PACKAGE_luci-lib-jsonc=y
+          CONFIG_PACKAGE_lua=y
+          CONFIG_PACKAGE_jq=y
+          CONFIG_PACKAGE_coreutils-sleep=y
           EOF
+
           make defconfig
+
           echo "--- Selected target ---"
           grep -E '^CONFIG_TARGET_(airoha|DEVICE_airoha_en7523)' .config || true
-          echo "--- SQM/CAKE packages ---"
-          grep -E '^CONFIG_PACKAGE_(sqm-scripts|luci-app-sqm|kmod-sched-cake|kmod-sched-fq_codel|kmod-ifb)' .config || true
+          echo "--- QoS packages selected ---"
+          grep -E '^CONFIG_PACKAGE_(sqm-scripts|luci-app-sqm|qosmate|luci-app-qosmate|kmod-sched-cake|kmod-sched-fq_codel|kmod-ifb|kmod-sched|kmod-veth|kmod-netem|kmod-sched-ctinfo|kmod-sched-red|ip-full|tc-full|luci-lib-jsonc|lua|jq|coreutils-sleep)=' .config || true
 
       - name: Download sources
         working-directory: openwrt
@@ -73,12 +98,13 @@ jobs:
           cp openwrt/.config artifact/build.config
           printf 'OpenWrt source commit: %s\n' "$SOURCE_COMMIT" > artifact/BUILD_INFO.txt
           printf 'Target: TP-Link xx230v/xx530v v1\n' >> artifact/BUILD_INFO.txt
-          printf 'SQM: sqm-scripts + luci-app-sqm\n' >> artifact/BUILD_INFO.txt
-          printf 'AQM: CAKE + fq_codel kernel modules\n' >> artifact/BUILD_INFO.txt
+          printf 'QoS: QoSmate v1.9.0 + LuCI frontend\n' >> artifact/BUILD_INFO.txt
+          printf 'Also included: SQM scripts + LuCI SQM + CAKE + FQ-CoDel + IFB\n' >> artifact/BUILD_INFO.txt
+          printf 'Important: run only one traffic-shaping service at a time.\n' >> artifact/BUILD_INFO.txt
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xx530v-sqm-firmware
+          name: xx530v-qosmate-sqm-firmware
           path: artifact/
           retention-days: 30
