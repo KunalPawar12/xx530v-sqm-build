@@ -1,7 +1,22 @@
-name: Build xx530v QoS firmware
+name: Build XX230V/XX530V QoS firmware
 
 on:
   workflow_dispatch:
+    inputs:
+      make_jobs:
+        description: Parallel build jobs
+        required: false
+        default: "$(($(nproc)+1))"
+        type: string
+      verbose:
+        description: OpenWrt build verbosity
+        required: false
+        default: "s"
+        type: choice
+        options:
+          - "none"
+          - "sc"
+          - "s"
   push:
     branches: [main]
 
@@ -11,100 +26,123 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-
+    timeout-minutes: 180
     steps:
-      - name: Checkout build repository
+      - name: Checkout this build repository
         uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
+          pkgs="build-essential clang flex bison g++ gawk gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget ccache jq"
+          if [[ "$(uname -m)" == "x86_64" ]]; then
+            pkgs="$pkgs gcc-multilib g++-multilib"
+          fi
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses5-dev libssl-dev python3 rsync unzip \
-            zlib1g-dev file wget swig time xsltproc ccache
+          sudo apt-get install -y $pkgs
 
-      - name: Clone exact OpenWrt source revision
+      - name: Clone developer build configuration
         run: |
-          git clone --depth 1 https://github.com/openwrt/openwrt.git openwrt
+          git clone --depth 1 https://sirherobrine23.com.br/airoha_en7523/builds.git developer-builds
+          test -f developer-builds/en7523.config
+          test -f developer-builds/en7523_files/feeds.conf
+          cp developer-builds/en7523.config .config
+          cp -a developer-builds/en7523_files ./files
+
+      - name: Clone developer OpenWrt source
+        run: |
+          git clone --depth 1 --branch airoha_en7523 https://github.com/Sirherobrine23/openwrt.git openwrt
           cd openwrt
-          git fetch --depth 1 origin aeee87fcbf75c3b8ea027fa33b50d795c60ffbb1
-          git checkout aeee87fcbf75c3b8ea027fa33b50d795c60ffbb1
           echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          cp ../.config .config
+          cp ../files/feeds.conf feeds.conf
 
-      - name: Add QoSmate backend and LuCI frontend
+      - name: Add QoSmate and SQM packages to developer config
         working-directory: openwrt
         run: |
-          git clone --depth 1 --branch v1.9.0 https://github.com/hudra0/qosmate.git package/qosmate
-          git clone --depth 1 https://github.com/hudra0/luci-app-qosmate.git package/luci-app-qosmate
+          cat >> .config <<'EOF'
 
-      - name: Update OpenWrt feeds
-        working-directory: openwrt
-        run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      - name: Select TP-Link xx230v/xx530v v1 and QoS packages
-        working-directory: openwrt
-        run: |
-          cat > .config <<'EOF'
-          CONFIG_TARGET_airoha=y
-          CONFIG_TARGET_airoha_en7523=y
-          CONFIG_TARGET_DEVICE_airoha_en7523_DEVICE_tplink_xx230v_v1=y
-
-          # SQM / CAKE
+          # QoS packages; only one traffic shaper should be active at a time.
           CONFIG_PACKAGE_sqm-scripts=y
           CONFIG_PACKAGE_luci-app-sqm=y
           CONFIG_PACKAGE_kmod-sched-cake=y
           CONFIG_PACKAGE_kmod-sched-fq_codel=y
           CONFIG_PACKAGE_kmod-ifb=y
-
-          # QoSmate backend/frontend and runtime dependencies
-          CONFIG_PACKAGE_qosmate=y
-          CONFIG_PACKAGE_luci-app-qosmate=y
+          CONFIG_PACKAGE_tc-full=y
+          CONFIG_PACKAGE_ip-full=y
           CONFIG_PACKAGE_kmod-sched=y
-          CONFIG_PACKAGE_kmod-veth=y
           CONFIG_PACKAGE_kmod-netem=y
           CONFIG_PACKAGE_kmod-sched-ctinfo=y
           CONFIG_PACKAGE_kmod-sched-red=y
-          CONFIG_PACKAGE_ip-full=y
-          CONFIG_PACKAGE_tc-full=y
+          CONFIG_PACKAGE_kmod-veth=y
           CONFIG_PACKAGE_luci-lib-jsonc=y
           CONFIG_PACKAGE_lua=y
           CONFIG_PACKAGE_jq=y
           CONFIG_PACKAGE_coreutils-sleep=y
           EOF
 
-          make defconfig
+          mkdir -p package/qosmate package/luci-app-qosmate
+          git clone --depth 1 --branch v1.9.0 https://github.com/hudra0/qosmate.git package/qosmate
+          git clone --depth 1 https://github.com/hudra0/luci-app-qosmate.git package/luci-app-qosmate
 
-          echo "--- Selected target ---"
-          grep -E '^CONFIG_TARGET_(airoha|DEVICE_airoha_en7523)' .config || true
-          echo "--- QoS packages selected ---"
-          grep -E '^CONFIG_PACKAGE_(sqm-scripts|luci-app-sqm|qosmate|luci-app-qosmate|kmod-sched-cake|kmod-sched-fq_codel|kmod-ifb|kmod-sched|kmod-veth|kmod-netem|kmod-sched-ctinfo|kmod-sched-red|ip-full|tc-full|luci-lib-jsonc|lua|jq|coreutils-sleep)=' .config || true
-
-      - name: Download sources
+      - name: Update and install feeds
         working-directory: openwrt
-        run: make download -j8
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Select QoSmate packages and finalize config
+        working-directory: openwrt
+        run: |
+          cat >> .config <<'EOF'
+          CONFIG_PACKAGE_qosmate=y
+          CONFIG_PACKAGE_luci-app-qosmate=y
+          EOF
+          make defconfig
+          echo '--- Device profiles ---'
+          grep -E '^CONFIG_TARGET_(airoha|DEVICE_airoha_en7523)' .config | grep -E 'tplink|MULTI|ALL' || true
+          echo '--- OMCI ---'
+          grep -E '^CONFIG_PACKAGE_(omci-agent|luci-app-omci)=' .config || true
+          echo '--- QoS ---'
+          grep -E '^CONFIG_PACKAGE_(sqm-scripts|luci-app-sqm|qosmate|luci-app-qosmate|kmod-sched-cake|kmod-sched-fq_codel|kmod-ifb|tc-full)=' .config || true
+
+      - name: Download dependencies
+        working-directory: openwrt
+        run: make -j8 download V=s
 
       - name: Build firmware
         working-directory: openwrt
         run: make -j$(nproc) V=s
 
-      - name: Collect firmware
+      - name: Verify target and QoS in build output
+        working-directory: openwrt
+        run: |
+          set -e
+          echo '--- Generated images ---'
+          find bin/targets/airoha/en7523 -maxdepth 1 -type f -printf '%f\n' | sort
+          test -f bin/targets/airoha/en7523/openwrt-airoha-en7523-tplink_xx230v-v1-squashfs-sysupgrade.bin
+          echo '--- Verify exact target ---'
+          grep -E '^CONFIG_TARGET_airoha_en7523_DEVICE_tplink_xx230v-v1=y' .config
+          echo '--- Verify OMCI ---'
+          grep -E '^CONFIG_PACKAGE_(omci-agent|luci-app-omci)=y' .config
+          echo '--- Verify QoS ---'
+          grep -E '^CONFIG_PACKAGE_(sqm-scripts|luci-app-sqm|qosmate|luci-app-qosmate|kmod-sched-cake|kmod-sched-fq_codel|kmod-ifb|tc-full)=y' .config
+
+      - name: Collect firmware artifacts
         run: |
           mkdir -p artifact
           cp -a openwrt/bin/targets/airoha/en7523/. artifact/
           cp openwrt/.config artifact/build.config
-          printf 'OpenWrt source commit: %s\n' "$SOURCE_COMMIT" > artifact/BUILD_INFO.txt
-          printf 'Target: TP-Link xx230v/xx530v v1\n' >> artifact/BUILD_INFO.txt
-          printf 'QoS: QoSmate v1.9.0 + LuCI frontend\n' >> artifact/BUILD_INFO.txt
-          printf 'Also included: SQM scripts + LuCI SQM + CAKE + FQ-CoDel + IFB\n' >> artifact/BUILD_INFO.txt
-          printf 'Important: run only one traffic-shaping service at a time.\n' >> artifact/BUILD_INFO.txt
+          printf 'Base: Sirherobrine23/openwrt airoha_en7523\n' > artifact/BUILD_INFO.txt
+          printf 'Source commit: %s\n' "$SOURCE_COMMIT" >> artifact/BUILD_INFO.txt
+          printf 'Device: TP-Link xx230v/xx530v v1 (tplink_xx230v-v1)\n' >> artifact/BUILD_INFO.txt
+          printf 'OMCI/xPON: preserved from developer build configuration\n' >> artifact/BUILD_INFO.txt
+          printf 'QoS: QoSmate + LuCI QoSmate + SQM + LuCI SQM + CAKE + FQ-CoDel\n' >> artifact/BUILD_INFO.txt
+          printf 'Important: enable only one traffic shaper at a time.\n' >> artifact/BUILD_INFO.txt
+          sha256sum artifact/*sysupgrade*.bin > artifact/SHA256SUMS.txt
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xx530v-qosmate-sqm-firmware
+          name: xx230v-xx530v-qos-firmware
           path: artifact/
           retention-days: 30
